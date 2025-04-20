@@ -1,0 +1,11 @@
+requests
+beautifulsoup4
+pyyaml
+sentence-transformers
+faiss-cpu
+numpy
+pandas
+streamlit
+flask
+tqdm
+huggingface_hub

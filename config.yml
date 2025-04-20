@@ -1,0 +1,31 @@
+scraper:
+  base_domain: "https://www.companyname.in"
+  pages:
+    sitemaps:
+      - "https://www.companyname.in/sitemap.xml"
+      - "https://www.companyname.in/sitemap-1.xml"
+      - "https://www.companyname.in/sitemap-2.xml"
+    urls:
+      - "https://www.companyname.in/"
+      - "https://www.companyname.in/page-1"
+      - "https://www.companyname.in/page-2"
+    max_pages: 1000
+  articles:
+    urls:
+      - "https://www.companyname.in/articles/article-1"
+      - "https://www.companyname.in/articles/article-2"
+    max_articles: 1000
+  output_dir: "data/raw"
+embeddings:
+  model: "sentence-transformers/all-MiniLM-L6-v2"
+  output_dir: "data/embeddings"
+rag:
+  chunk_size: 1000
+  top_k: 3
+chatbot:
+  context_window: 5
+knowledgebase:
+  output_dir: "data/knowledgebase"
+vector_store:
+  output_dir: "data/vectorstore"
+  index_path: "data/vectorstore/index.faiss"
