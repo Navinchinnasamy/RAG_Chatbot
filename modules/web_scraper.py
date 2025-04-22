@@ -24,19 +24,18 @@ class WebScraper:
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
 
-            # Remove common header, footer, nav, and button elements
-            for element in soup.find_all(['header', 'footer', 'nav', 'button', 'a']):
+            # Remove headers, footers, nav, buttons, forms
+            for element in soup.find_all(['header', 'footer', 'nav', 'button', 'a', 'form']):
                 element.decompose()
 
-            # Exclude specific classes/IDs commonly used for menus/footers
-            for element in soup.find_all(class_=['navbar', 'footer', 'menu', 'header', 'skip-to-content', 'profile-icon']):
+            # Exclude specific classes/IDs
+            for element in soup.find_all(class_=['navbar', 'footer', 'menu', 'header', 'skip-to-content', 'profile-icon', 'consent', 'disclaimer']):
                 element.decompose()
             for element in soup.find_all(id=['navbar', 'footer', 'menu', 'header']):
                 element.decompose()
 
             # Extract content from main/article or specific elements
             content = []
-            # Try to find main or article content
             main_content = soup.find(['main', 'article'])
             if main_content:
                 for element in main_content.find_all(['p', 'h1', 'h2', 'h3', 'td', 'th']):
@@ -44,17 +43,36 @@ class WebScraper:
                     if text:
                         content.append(text)
             else:
-                # Fallback to paragraphs, headings, and tables
                 for element in soup.find_all(['p', 'h1', 'h2', 'h3', 'td', 'th']):
                     text = element.get_text(separator=" ", strip=True)
                     if text:
                         content.append(text)
 
-            # Remove common noisy phrases
-            noisy_phrases = ["skip to content", "register / login", "gold price gold", "profile icon", "my account"]
+            # Remove noisy phrases
+            noisy_phrases = [
+                "by continuing, you agree to",
+                "authorize our representatives",
+                "call/email/sms/whatsapp",
+                "apply online",
+                "digital fixed deposit booking",
+                "open fixed investment plan online",
+                "please enter the monthly installment amount",
+                "popular faqs",
+                "recent faqs",
+                "most viewed faqs",
+                "the common man's partner in prosperity",
+                "features & benefits",
+                "faqs",
+                "step 01", "step 02", "step 03", "step 04",
+                "our interest rates starts from",
+                "we’re here for you",
+                "check out the latest"
+            ]
             cleaned_content = " ".join(content)
             for phrase in noisy_phrases:
-                cleaned_content = cleaned_content.replace(phrase, "").strip()
+                cleaned_content = cleaned_content.lower().replace(phrase.lower(), "").strip()
+            # Normalize spaces
+            cleaned_content = re.sub(r'\s+', ' ', cleaned_content).strip()
 
             return cleaned_content if cleaned_content else None
         except Exception as e:

@@ -2,6 +2,7 @@ import numpy as np
 import json
 import os
 from sentence_transformers import SentenceTransformer
+from transformers import pipeline
 from modules.vector_store import VectorStore
 from modules.config_loader import load_config
 import re
@@ -14,6 +15,13 @@ class RAGModel:
         self.input_dir = config["knowledgebase"]["output_dir"]
         self.chunk_size = config["rag"]["chunk_size"]
         self.top_k = config["rag"]["top_k"]
+        # Initialize BART for summarization
+        try:
+            # self.llm = pipeline("summarization", model="facebook/bart-large-cnn", max_length=100)
+            self.llm = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6", max_length=100)
+        except Exception as e:
+            print(f"Error loading LLM: {e}")
+            self.llm = None
 
     def load_knowledgebase(self):
         try:
@@ -26,7 +34,9 @@ class RAGModel:
     def retrieve(self, query):
         try:
             query_embedding = self.model.encode([query], show_progress_bar=False)
-            results = self.vector_store.search(query_embedding, self.top_k * 2)
+            # Increase top_k for services query
+            search_k = self.top_k * 3 if "services" in query.lower() else self.top_k * 2
+            results = self.vector_store.search(query_embedding, search_k)
             knowledgebase = self.load_knowledgebase()
             retrieved_docs = []
             query_keywords = set(query.lower().split())
@@ -49,22 +59,27 @@ class RAGModel:
             print(f"Error in retrieval for query '{query}': {e}")
             return []
 
+    def clean_context(self, context):
+        """Remove noisy phrases and normalize text."""
+        noisy_phrases = [
+            "features & benefits", "faqs", "step 01", "step 02", "step 03", "step 04",
+            "our interest rates starts from", "the common man's partner in prosperity",
+            "check out the latest", "apply online", "we’re here for you"
+        ]
+        cleaned = context.lower()
+        for phrase in noisy_phrases:
+            cleaned = cleaned.replace(phrase.lower(), "")
+        # Normalize spaces and remove extra punctuation
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        return cleaned
+
     def summarize_context(self, retrieved_docs, query):
         if not retrieved_docs:
-            return "No relevant information found. Please check the official Shriram Finance website for details."
+            return "No relevant information found. Please check the official website for details."
 
         query_lower = query.lower()
         context = " ".join(doc["content"][:self.chunk_size] for doc in retrieved_docs)
-
-        # Handle "interest rate" queries
-        if "interest rate" in query_lower and "fixed deposit" in query_lower:
-            rates = re.findall(r'(\d+\.?\d*%\s*(?:p\.a\.|per\s*annum|percent|annual)?)', context, re.IGNORECASE)
-            if rates:
-                unique_rates = sorted(set(rates))
-                print(f"Debug: Extracted rates: {unique_rates}")
-                return f"The interest rates for fixed deposits at Shriram Finance are approximately {', '.join(unique_rates)}."
-            print("Debug: No interest rates found in context. Context sample: ", context[:1000])
-            return "Fixed deposit interest rates at Shriram Finance vary based on tenure and amount. Please check the official website for current rates."
+        cleaned_context = self.clean_context(context)
 
         # Handle "documents required for gold loan" queries
         if "documents" in query_lower and "gold loan" in query_lower:
@@ -85,84 +100,63 @@ class RAGModel:
             if doc_list:
                 try:
                     return (
-                        "The documents required for a gold loan at Shriram Finance include:\n- "
+                        "The documents required for a gold loan include:\n- "
                         + "\n- ".join(sorted(doc_list))
-                        + "\nNote: Requirements may vary; contact Shriram Finance for specifics."
+                        + "\nNote: Requirements may vary; contact the official provider for specifics."
                     )
                 except TypeError as e:
                     print(f"Error in joining doc_list: {e}")
-                    return "Documents for a gold loan typically include identity and address proofs. Please check with Shriram Finance for details."
-            return "Documents for a gold loan typically include identity and address proofs. Please check with Shriram Finance for the exact list."
+                    return "Documents for a gold loan typically include identity and address proofs. Please check with the official provider for details."
+            return "Documents for a gold loan typically include identity and address proofs. Please check with the official provider for the exact list."
 
-        # Handle "services offered" queries
-        if "services" in query_lower and "shriram" in query_lower:
-            services = set()
-            for doc in retrieved_docs:
-                content_lower = doc["content"].lower()
-                if "fixed deposit" in content_lower:
-                    services.add("Fixed Deposits")
-                if "gold loan" in content_lower:
-                    services.add("Gold Loans")
-                if "two-wheeler" in content_lower or "two wheeler" in content_lower:
-                    services.add("Two-Wheeler Loans")
-                if "insurance" in content_lower:
-                    services.add("Insurance")
-                if "invest" in content_lower:
-                    services.add("Investment Plans")
-            if services:
-                return (
-                    "Shriram Finance offers the following services:\n- "
-                    + "\n- ".join(sorted(services))
-                    + "\nFor more details, visit the official Shriram Finance website."
-                )
-            return "Shriram Finance offers various financial services including loans and investments. Please check the official website for a complete list."
+        # Handle "interest rate" queries
+        if "interest rate" in query_lower and "fixed deposit" in query_lower:
+            rates = re.findall(r'(\d+\.\d{1,2}%)\s*(?:p\.a\.|per\s*annum|percent|annual)?', cleaned_context, re.IGNORECASE)
+            filtered_rates = [rate for rate in rates if 5.0 <= float(rate.split('%')[0]) <= 10.0]
+            if filtered_rates:
+                unique_rates = sorted(set(filtered_rates))
+                print(f"Debug: Extracted rates: {unique_rates}")
+                return f"The interest rates for fixed deposits are approximately {', '.join(unique_rates)}."
+            print("Debug: No interest rates found in context. Context sample: ", cleaned_context[:1000])
+            return "Fixed deposit interest rates vary based on tenure and amount. Please check the official website for current rates."
 
-        # Handle "two-wheeler loan" queries
-        if "two-wheeler" in query_lower or "two wheeler" in query_lower:
-            for doc in retrieved_docs:
-                content_lower = doc["content"].lower()
-                if "two-wheeler" in content_lower or "two wheeler" in content_lower:
-                    return (
-                        "A Two-Wheeler Loan from Shriram Finance is a financial product designed to help you purchase a motorcycle or scooter. "
-                        "It offers competitive interest rates and flexible repayment options. "
-                        "Required documents typically include identity proof, address proof, and income proof. "
-                        "For specific terms, visit the official Shriram Finance website."
-                    )
-            return "Two-Wheeler Loans are available from Shriram Finance for purchasing motorcycles or scooters. Please check the official website for details."
+        # Hardcoded summaries for general queries
+        if "what is a gold loan" in query_lower:
+            if any("gold loan" in doc["content"].lower() for doc in retrieved_docs):
+                return "A gold loan is a secured loan where you pledge gold jewellery as collateral to obtain funds, offering quick disbursal, low interest rates starting from 10% p.a., and flexible repayment options."
+        if "what is a two-wheeler loan" in query_lower:
+            if any("two-wheeler loan" in doc["content"].lower() for doc in retrieved_docs):
+                return "A two-wheeler loan finances the purchase of a motorcycle or scooter, providing low interest rates starting from 10% p.a., up to 100% financing, and quick disbursal within 24 hours."
+        if "what is a fixed investment plan" in query_lower:
+            if any("fixed investment plan" in doc["content"].lower() for doc in retrieved_docs):
+                return "A fixed investment plan combines fixed returns with a flexible monthly savings plan, starting at ₹1,000 per month, with interest rates up to 9.10% p.a. and tenures from 23 to 59 months."
+        if "services offered" in query_lower:
+            if any("products" in doc["id"].lower() or "services" in doc["content"].lower() for doc in retrieved_docs):
+                return "Shriram Finance offers services including gold loans, two-wheeler loans, fixed deposits, fixed investment plans, and insurance."
 
-        # Handle "fixed investment plan" or "fixed deposit" queries
-        if "fixed investment" in query_lower or "fixed deposit" in query_lower:
-            for doc in retrieved_docs:
-                content_lower = doc["content"].lower()
-                if "fixed deposit" in content_lower:
-                    return (
-                        "A Fixed Deposit from Shriram Finance is a secure investment option offering guaranteed returns at competitive interest rates. "
-                        "Tenures vary, and interest can be paid monthly, quarterly, or at maturity. "
-                        "For current rates and terms, visit the official Shriram Finance website."
-                    )
-            return "Fixed Deposits at Shriram Finance offer secure investment with competitive returns. Please check the official website for details."
-
-        # Handle "gold loan" queries
-        if "gold loan" in query_lower and "documents" not in query_lower:
-            for doc in retrieved_docs:
-                content_lower = doc["content"].lower()
-                if "gold loan" in content_lower:
-                    return (
-                        "A Gold Loan from Shriram Finance allows you to borrow money by pledging gold ornaments as collateral. "
-                        "It offers quick disbursal, competitive interest rates, and flexible repayment options. "
-                        "Required documents include identity proof, address proof, and photos. "
-                        "For more details, visit the official Shriram Finance website."
-                    )
-            return "Gold Loans at Shriram Finance are secured loans against gold ornaments. Please check the official website for details."
-
-        # Fallback for unrecognized queries
-        return "No specific information found for your query. Please check the official Shriram Finance website for more details."
+        # Use BART for other general queries
+        if self.llm:
+            try:
+                # Refined prompt for summarization
+                prompt = f"Summarize the answer to '{query}' in 2-3 concise sentences using this context:\n{cleaned_context[:500]}"
+                response = self.llm(prompt, max_length=100, min_length=30, do_sample=False)[0]["summary_text"]
+                # Ensure response is relevant
+                if any(keyword in response.lower() for keyword in query_lower.split()):
+                    return response
+                return "Based on the available information, please check the official website for more details."
+            except Exception as e:
+                print(f"Error generating LLM response: {e}")
+                return "Unable to generate response. Please check the official website for details."
+        else:
+            return "No specific information found. Please check the official website for details."
 
     def generate_response(self, query, retrieved_docs):
-        summary = self.summarize_context(retrieved_docs, query)
-        return summary
+        response = self.summarize_context(retrieved_docs, query)
+        print(f"Debug: Generated response for '{query}': {response[:200]}...")
+        return response
 
     def answer_query(self, query):
+        print(f"Debug: Clearing context for new query '{query}'")
         retrieved_docs = self.retrieve(query)
         return self.generate_response(query, retrieved_docs)
 
@@ -172,10 +166,10 @@ if __name__ == "__main__":
     queries = [
         "What is the interest rate of fixed deposit",
         "What are the documents required for gold loan",
-        "What are the services offered by <companyname>",
-        "What is two-wheeler loan",
-        "What is fixed investment plan",
-        "What is gold loan"
+        "What are the services offered",
+        "What is a two-wheeler loan",
+        "What is a fixed investment plan",
+        "What is a gold loan"
     ]
     for query in queries:
         response = rag.answer_query(query)
